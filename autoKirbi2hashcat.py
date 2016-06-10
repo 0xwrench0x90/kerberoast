@@ -28,7 +28,7 @@ import glob, sys, base64
 # This will seperate out the list of all tickets into an array of individual tickets
 def parseTickets(allTickets):
 	magicString1 = "Base64 encoded Kerberos ticket for "
-	magicString2 = ":do"
+	magicString2 = ":::do"
 	ticketArray = []
 	labelArray = []
 
@@ -42,7 +42,7 @@ def parseTickets(allTickets):
 	for i in combinedArray:
 		magicString2Location = i.index(magicString2)
 		labelArray.append(str(i[:magicString2Location]))
-		ticketArray.append(str(i[(magicString2Location+1):]))
+		ticketArray.append(str(i[(magicString2Location+3):]))
 
 	return ticketArray, labelArray
 
