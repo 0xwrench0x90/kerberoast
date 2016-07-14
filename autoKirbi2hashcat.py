@@ -1,4 +1,4 @@
-# Note: This is a copy of kirbi2john.py with slight modifications to take input from Invoke-Autokerberoast function output and output in a hashcat-compatible format.  Only minimal testing has been performed.
+# Note: This is a copy of kirbi2john.py with slight modifications to take input from Invoke-Autokerberoast function output and output in a hashcat-compatible format.
 
 
 # Based on the Kerberoast script from Tim Medin to extract the Kerberos tickets
@@ -31,6 +31,7 @@ def parseTickets(allTickets):
 	magicString2 = ":::do"
 	ticketArray = []
 	labelArray = []
+	failedTicketLabelArray = []
 
 	if ( allTickets[:len(magicString1)] != magicString1 ):
 		print "ERROR: Ticket file must start with string \"Base64 encoded Kerberos ticket for\" from Invoke-AutoKerberoast Output."
@@ -40,11 +41,15 @@ def parseTickets(allTickets):
 	combinedArray = combinedArray[1:]
 
 	for i in combinedArray:
-		magicString2Location = i.index(magicString2)
-		labelArray.append(str(i[:magicString2Location]))
-		ticketArray.append(str(i[(magicString2Location+3):]))
+		try:
+			magicString2Location = i.index(magicString2)
+			labelArray.append(str(i[:magicString2Location]))
+			ticketArray.append(str(i[(magicString2Location+3):]))
+		except:
+			endOfNameLocation = i.index(":::")
+			failedTicketLabelArray.append(str(i[:endOfNameLocation]))
 
-	return ticketArray, labelArray
+	return ticketArray, labelArray, failedTicketLabelArray
 
 # Format base64 encoded ticket into hashcat-ready string.  Label should be describe where the ticket came from, e.g. "MSSQLSvc/SQLBOX.RESTRICTED.TESTLAB.LOCAL:1433"
 def formatTicket(ticket, label):
@@ -65,22 +70,33 @@ def formatTicket(ticket, label):
 
 
 def main():
-	if len(sys.argv) != 2:
-		print 'USAGE: python ./autoKirbi2hashcat.py <ticketsFile.txt>\nNote: Tickets file should be the output of Invoke-AutoKerberoast, starting with \'Base64 encoded Kerberos ticket for...\''
+	if len(sys.argv) < 2 or len(sys.argv) > 3:
+		print 'USAGE: python ./autoKirbi2hashcat.py <ticketsFile.txt>\n\tNote: Tickets file should be the output of Invoke-AutoKerberoast, starting with \'Base64 encoded Kerberos ticket for...\''
+		print 'OPTIONAL USAGE: python ./autoKirbi2hashcat.py <ticketsFile.txt> MASK\n\tNote: placing the word MASK as the third argument will replace the username/SPN caption with numeric values'
 		exit(1)
 
-	ticketsFileName = sys.argv[1]
 	hashcatTickets = ""
+	ticketsFileName = sys.argv[1]
+	maskNames = False
+	if (len(sys.argv) == 3) and (sys.argv[2] == "MASK"):
+		maskNames = True
 
 	ticketsFile = open(ticketsFileName, 'r')
 	ticketsFileString = ticketsFile.read().replace('\n','')
 
-	ticketArray, labelArray = parseTickets(ticketsFileString)
+	ticketArray, labelArray, failedTicketLabelArray = parseTickets(ticketsFileString)
+
+	if (maskNames == True):
+		labelArray = range(1,len(labelArray)+1)
 
 	for i in range(len(ticketArray)):
 		hashcatTickets += formatTicket(ticketArray[i], labelArray[i])
 
 	print hashcatTickets
+
+	if len(failedTicketLabelArray) > 0:
+		print "WARNING: unable to convert tickets for: "
+		print str(failedTicketLabelArray)
 
 
 if __name__ == '__main__':

