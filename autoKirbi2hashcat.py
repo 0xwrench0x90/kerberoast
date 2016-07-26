@@ -83,6 +83,7 @@ def main():
 
 	ticketsFile = open(ticketsFileName, 'r')
 	ticketsFileString = ticketsFile.read().replace('\n','')
+	ticketsFileString = ticketsFileString.replace('[+] received output:','')
 
 	ticketArray, labelArray, failedTicketLabelArray = parseTickets(ticketsFileString)
 
