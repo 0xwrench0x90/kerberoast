@@ -40,14 +40,16 @@ def parseTickets(allTickets):
 	combinedArray = allTickets.split(magicString1)
 	combinedArray = combinedArray[1:]
 
+	count = 0
 	for i in combinedArray:
+		count += 1
 		try:
 			magicString2Location = i.index(magicString2)
-			labelArray.append(str(i[:magicString2Location]))
+			labelArray.append("ID#"+str(count)+"_"+str(i[:magicString2Location]))
 			ticketArray.append(str(i[(magicString2Location+3):]))
 		except:
 			endOfNameLocation = i.index(":::")
-			failedTicketLabelArray.append(str(i[:endOfNameLocation]))
+			failedTicketLabelArray.append("ID#"+str(count)+"_"+str(i[:endOfNameLocation]))
 
 	return ticketArray, labelArray, failedTicketLabelArray
 
@@ -78,7 +80,7 @@ def main():
 	hashcatTickets = ""
 	ticketsFileName = sys.argv[1]
 	maskNames = False
-	if (len(sys.argv) == 3) and (sys.argv[2] == "MASK"):
+	if (len(sys.argv) == 3) and (str(sys.argv[2]).upper() == "MASK"):
 		maskNames = True
 
 	ticketsFile = open(ticketsFileName, 'r')
@@ -88,7 +90,14 @@ def main():
 	ticketArray, labelArray, failedTicketLabelArray = parseTickets(ticketsFileString)
 
 	if (maskNames == True):
-		labelArray = range(1,len(labelArray)+1)
+		for i in range(len(labelArray)):
+			maskedLabel = str(labelArray[i])
+			maskedLabelCutOffLoc = maskedLabel.index("_")+1
+			labelArray[i] = maskedLabel[:maskedLabelCutOffLoc]
+		for i in range(len(failedTicketLabelArray)):
+			maskedLabel = str(failedTicketLabelArray[i])
+			maskedLabelCutOffLoc = maskedLabel.index("_")+1
+			failedTicketLabelArray[i] = maskedLabel[:maskedLabelCutOffLoc]
 
 	for i in range(len(ticketArray)):
 		hashcatTickets += formatTicket(ticketArray[i], labelArray[i])
