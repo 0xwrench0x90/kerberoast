@@ -81,10 +81,13 @@ function List-UserSPNs
   }
   else # find them
   { 
-  	$ForestInfo = [System.DirectoryServices.ActiveDirectory.Forest]::GetCurrentForest()
-  	$CurrentGCs = $ForestInfo.FindAllGlobalCatalogs()
-
-    $ForestInfo.ApplicationPartitions | % { $GCs += $_.SecurityReferenceDomain }
+    # This code for identifying domains in current forest was Copied directly from Powerview's Get-ForestDomain Function, found at https://raw.githubusercontent.com/PowerShellMafia/PowerSploit/master/Recon/PowerView.ps1
+    $ForestObject = [System.DirectoryServices.ActiveDirectory.Forest]::GetCurrentForest()
+    $ForestSid = (New-Object System.Security.Principal.NTAccount($ForestObject.RootDomain,"krbtgt")).Translate([System.Security.Principal.SecurityIdentifier]).Value
+    $Parts = $ForestSid -Split "-"
+    $ForestSid = $Parts[0..$($Parts.length-2)] -join "-"
+    $ForestObject | Add-Member NoteProperty 'RootDomainSid' $ForestSid
+    $ForestObject.Domains | % { $GCs += $_.Name }   
   }
 
   # Remove any duplicate Global Catalogs Entries from Array
@@ -93,7 +96,7 @@ function List-UserSPNs
   if ( -not $GCs ) 
   {
   	# no Global Catalogs Found
-  	Write-Host "No Global Catalogs Found!"
+  	Write-Output "No Global Catalogs Found!"
   	Exit
   }
 
