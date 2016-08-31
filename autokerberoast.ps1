@@ -40,7 +40,7 @@ function List-UserSPNs
   .PARAMETER Domain
     This will only query the DC in a specified domain for SPNs that use User accounts.  Default is to query entire Forest.
 
-  .PARAMETER Group
+  .PARAMETER GroupName
     This paremeter will only return SPNs that use users in a specific group, e.g. "Domain Admins"
 
   .PARAMETER ViewAll
@@ -52,7 +52,7 @@ function List-UserSPNs
 
   .EXAMPLE
     PS C:\> List-UserSPNS
-    PS C:\> List-UserSPNS -Group "Domain Admins"
+    PS C:\> List-UserSPNS -GroupName "Domain Admins"
     PS C:\> List-UserSPNS -Domain dev.testlab.local
 #>
 
@@ -62,7 +62,7 @@ function List-UserSPNs
     [string]$Domain = "",
 
     [Parameter(Mandatory=$False)]
-    [string]$Group = "",
+    [string]$GroupName = "",
 
     [Parameter(Mandatory=$False)]
     [switch]$ViewAll,
@@ -177,7 +177,7 @@ function List-UserSPNs
           }
         }
 
-        if ( $Groups -like "*$Group*" )
+        if ( $Groups -like "*$GroupName*" )
         {
           Select-Object -InputObject $result -Property `
           @{Name="SPN"; Expression={$spn.ToString()} }, `
@@ -216,7 +216,7 @@ function Invoke-AutoKerberoast
     .PARAMETER Domain
         This will only query the DC in a specified domain for SPNs that use User accounts.  Default is to query entire Forest.
 
-    .PARAMETER Group
+    .PARAMETER GroupName
         This paremeter will only return SPNs that use users in a specific group, e.g. "Domain Admins".
 
     .PARAMETER SPN
@@ -224,7 +224,7 @@ function Invoke-AutoKerberoast
 
     .EXAMPLE
         PS C:\> List-UserSPNS
-        PS C:\> List-UserSPNS -Group "Domain Admins"
+        PS C:\> List-UserSPNS -GroupName "Domain Admins"
         PS C:\> List-UserSPNS -Domain dev.testlab.local
         PS C:\> List-UserSPNS -SPN MSSQLSvc/sqlBox.testlab.local:1433
 #>
@@ -232,7 +232,7 @@ function Invoke-AutoKerberoast
     [CmdletBinding()]
     Param(
         [Parameter(Mandatory=$False)] 
-        [string]$Group="",
+        [string]$GroupName="",
 
         [Parameter(Mandatory=$False)]
         [string]$Domain="",
@@ -260,7 +260,7 @@ function Invoke-AutoKerberoast
     }
     else
     {
-        $SPNs = List-UserSPNs -Request -Group $Group -Domain $Domain | Select SPN, DistinguishedName
+        $SPNs = List-UserSPNs -Request -Group $GroupName -Domain $Domain | Select SPN, DistinguishedName
         if ( ! $SPNs )
         {
             write-output "Unable to obtain any user account SPNs"
